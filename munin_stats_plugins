@@ -16,7 +16,21 @@ my $cache_tmp = "$cache.tmp";
 
 my @plugins = parse_plugin_time($cache);
 
+# We should reload our data
+if (not $ARGV[0] and $ENV{MUNIN_STATS_PLUGINS_RELOAD}) {
+    $ARGV[0] = 'reload';
+}
+
 given ($ARGV[0]) {
+    when ("reload") {
+        # Plugin names
+        my @plugs = plugin_names();
+
+        # Run all the plugins
+        my $time = plugin_times(@plugs);
+
+        write_plugin_times($cache_tmp, $cache, $time);
+    }
     when ("config") {
         print <<END;
 graph_title Munin plugin processing time
@@ -34,34 +48,6 @@ $fieldname.info The processing time of $name
 $fieldname.draw AREASTACK
 END
         }
-    }
-    when ("reload") {
-        my @plugins = map { basename $_ } grep { -x } glob "/etc/munin/plugins/*";
-
-        # Run all the plugins
-        my %time;
-        for my $plugin (@plugins) {
-            my $t0 = [gettimeofday];
-
-            open my $proc, "munin-run $plugin |";
-            1 while <$proc>;
-            close $proc;
-
-            my $t1 = [gettimeofday];
-            my $elapsed = tv_interval($t0, $t1);
-            $time{$plugin} = sprintf "%0.2f", $elapsed;
-        }
-
-        # Write out the runtimes to a tempfile
-        open my $fh, ">", $cache_tmp;
-        while (my ($p, $t) = each %time) {
-            say $fh "$t $p";
-        }
-        close $fh;
-
-        # Rename the temp to the real thing. If we wrote it to begin
-        # with we might have a race condition.
-        rename $cache_tmp, $cache;
     }
     default {
         for my $plugin (@plugins) {
@@ -92,4 +78,40 @@ sub parse_plugin_time
     @plugins = sort { $b->[0] <=> $a->[0] } @plugins;
 
     @plugins;
+}
+
+sub plugin_names {
+    map { basename $_ } grep { -x } glob "/etc/munin/plugins/*";
+}
+
+sub plugin_times {
+    my (@p) = @_;
+    my %time;
+
+    for my $plugin (@p) {
+        my $t0 = [gettimeofday];
+        system "MUNIN_STATS_PLUGINS_RELOAD=0 munin-run $plugin >/dev/null 2>&1"
+            and die "munin-run $plugin: $!";
+        my $t1 = [gettimeofday];
+
+        my $elapsed = tv_interval($t0, $t1);
+        $time{$plugin} = sprintf "%0.2f", $elapsed;
+    }
+
+    return \%time;
+}
+
+sub write_plugin_times {
+    my ($tmp, $real, $time) = @_;
+
+    # Write out the runtimes to a tempfile
+    open my $fh, ">", $cache_tmp;
+    while (my ($p, $t) = each %$time) {
+        say $fh "$t $p";
+    }
+    close $fh;
+
+    # Rename the temp to the real thing. If we wrote it to begin
+    # with we might have a race condition.
+    rename $cache_tmp, $cache;
 }
