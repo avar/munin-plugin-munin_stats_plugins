@@ -9,6 +9,54 @@ use Time::HiRes qw(gettimeofday tv_interval);
 use File::Spec::Functions qw(catfile);
 use File::Basename qw(basename);
 
+=head1 NAME
+
+munin_stats_plugins - Report the time it takes to run all munin plugins
+
+=head1 SYNOPSIS
+
+In F</etc/munin/plugin-conf.d/munin-node>, because we invoke plugins
+with munin-run, some of which may need root privileges:
+
+    [munin_stats_plugins]
+    user root
+
+Put this in cron somewhere:
+
+    # Refresh the statistics
+    MUNIN_STATS_PLUGINS_RELOAD=1 munin-run munin_stats_plugins
+
+E.g.:
+
+    40 4  * * * root MUNIN_STATS_PLUGINS_RELOAD=1 munin-run munin_stats_plugins
+
+Then run it:
+
+    # Get the statistics
+    munin-run munin_stats_plugins
+
+=head1 DESCRIPTION
+
+Runs all the munin plugins in F</etc/munin/plugins> and reports the
+time it takes to run each one with C<system> and L<Time::HiRes>. Since
+running all the plugins again on each munin-update run would lead to
+epic recursive failure, you have to reload the statistics database
+yourself by reloading it in cron somewhere.
+
+=head1 AUTHOR
+
+E<AElig>var ArnfjE<ouml>rE<eth> Bjarmason <avar@cpan.org>
+
+=head1 LICENSE
+
+This program is in the public domain.
+
+=head1 MAGIC MARKERS
+
+ #%# family=manual
+
+=cut
+
 my $statedir  = $ENV{MUNIN_PLUGSTATE};
 my $statefile = $0; $statefile =~ s[^.*/][];
 my $cache = catfile($statedir, $statefile . '-cache');
@@ -60,14 +108,18 @@ END
     }
 }
 
+sub slurp {
+    do {
+        local (@ARGV, $/) = shift;
+        scalar <>;
+    };
+}
+
 sub parse_plugin_time
 {
     my ($file) = @_;
 
-    my $cont = do {
-        local (@ARGV, $/) = $file;
-        scalar <>;
-    };
+    my $cont = slurp($file);
 
     my @plugins;
     while ($cont =~ /^ (?<time>[\d.]+) \s+ (?<plugin>.*) $/mgx) {
@@ -88,10 +140,15 @@ sub plugin_times {
     my (@p) = @_;
     my %time;
 
+    my $dir = tempdir("munin-stats-plugins-XXXX", CLEANUP => 1, TMPDIR => 1);
+
     for my $plugin (@p) {
+        my ($fh, $file) = tempfile(DIR => $dir);
         my $t0 = [gettimeofday];
-        system "MUNIN_STATS_PLUGINS_RELOAD=0 munin-run $plugin >/dev/null 2>&1"
-            and die "munin-run $plugin: $!";
+        if (system qq[MUNIN_STATS_PLUGINS_RELOAD=0 munin-run "$plugin" >"$file" 2>&1]) {
+            my $cont = slurp($file);
+            die "munin-run: Failed to run plugin $plugin: $?, output: $cont";
+        }
         my $t1 = [gettimeofday];
 
         my $elapsed = tv_interval($t0, $t1);
