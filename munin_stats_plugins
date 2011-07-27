@@ -62,8 +62,6 @@ my $statefile = $0; $statefile =~ s[^.*/][];
 my $cache = catfile($statedir, $statefile . '-cache');
 my $cache_tmp = "$cache.tmp";
 
-my @plugins = parse_plugin_time($cache);
-
 # We should reload our data
 if (not $ARGV[0] and $ENV{MUNIN_STATS_PLUGINS_RELOAD}) {
     $ARGV[0] = 'reload';
@@ -87,7 +85,7 @@ graph_vlabel seconds
 graph_category munin
 graph_info Shows the processing time of munin plugins in seconds
 END
-        for my $plugin (@plugins) {
+        for my $plugin (plugins()) {
             my ($time, $name) = @$plugin;
             my $fieldname = clean_fieldname($name);
             print <<END;
@@ -98,7 +96,7 @@ END
         }
     }
     default {
-        for my $plugin (@plugins) {
+        for my $plugin (plugins()) {
             my ($time, $name) = @$plugin;
             my $fieldname = clean_fieldname($name);
             print <<END;
@@ -106,6 +104,10 @@ $fieldname.value $time
 END
         }
     }
+}
+
+sub plugins {
+    parse_plugin_time($cache);
 }
 
 sub slurp {
